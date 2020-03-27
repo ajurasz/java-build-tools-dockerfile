@@ -1,4 +1,4 @@
-FROM ubuntu:16.04
+FROM adoptopenjdk/openjdk11:jdk-11.0.6_10-ubuntu
 LABEL name="Java Build Tools" \
       maintainer="Cyrille Le Clerc <cleclerc@cloudbees.com>" \
       license="Apache-2.0" \
@@ -52,10 +52,8 @@ RUN apt-get update -qqy \
 #========================
 RUN apt-get update -qqy \
   && apt-get -qqy --no-install-recommends install \
-    iproute \
     openssh-client ssh-askpass\
     ca-certificates \
-    openjdk-8-jdk \
     tar zip unzip \
     wget curl \
     git \
@@ -66,7 +64,6 @@ RUN apt-get update -qqy \
     rlwrap \
     rsync \
   && rm -rf /var/lib/apt/lists/* \
-  && sed -i 's/securerandom\.source=file:\/dev\/random/securerandom\.source=file:\/dev\/urandom/' ./usr/lib/jvm/java-8-openjdk-amd64/jre/lib/security/java.security
 
 # workaround https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=775775
 RUN [ -f "/etc/ssl/certs/java/cacerts" ] || /var/lib/dpkg/info/ca-certificates-java.postinst configure
@@ -75,6 +72,23 @@ RUN [ -f "/etc/ssl/certs/java/cacerts" ] || /var/lib/dpkg/info/ca-certificates-j
 RUN pip install --upgrade pip setuptools
 
 RUN pip install yq
+
+#==========
+# Docker
+#==========
+ENV DOCKER_VERSION 18.06.2
+
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-$DOCKER_VERSION-ce.tgz | tar xzf - -C /usr/share \
+  && ln -s /usr/share/docker/docker /usr/bin/docker
+
+#==========
+# Docker Compose
+#==========  
+ENV DOCKER_COMPOSE_VERSION 1.22.0
+
+RUN curl -fsSL --output /usr/share/docker-compose  https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` \
+  && chmod +x /usr/share/docker-compose \
+  && ln -s /usr/share/docker-compose /usr/bin/docker-compose
 
 #==========
 # Maven
@@ -98,6 +112,20 @@ RUN curl -fsSL https://www.apache.org/dist/ant/binaries/apache-ant-$ANT_VERSION-
   && ln -s /usr/share/ant/bin/ant /usr/bin/ant
 
 ENV ANT_HOME /usr/share/ant
+
+#==========
+# Gradle
+#==========
+
+ENV GRADLE_VERSION 5.6.2
+
+RUN curl -fsSL --output /usr/share/gradle.zip https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip \
+  && unzip /usr/share/gradle.zip -d /usr/share/ \
+  && mv /usr/share/gradle-$GRADLE_VERSION /usr/share/gradle \
+  && ln -s /usr/share/gradle/bin/gradle /usr/bin/gradle \
+  && rm -rf /usr/share/gradle.zip
+
+ENV GRADLE_HOME /usr/share/gradle
 
 #==========
 # Selenium
@@ -171,63 +199,19 @@ RUN wget -O - "https://github.com/mozilla/geckodriver/releases/download/$GECKO_D
       | tar -xz -C /usr/bin
 
 #====================================
-# Cloud Foundry CLI
-# https://github.com/cloudfoundry/cli
-#====================================
-RUN wget -O - "http://cli.run.pivotal.io/stable?release=linux64-binary&source=github" | tar -C /usr/local/bin -zxf -
-
-#====================================
-# AWS CLI
-#====================================
-RUN pip install awscli
-
-# compatibility with CloudBees AWS CLI Plugin which expects pip to be installed as user
-RUN mkdir -p /home/jenkins/.local/bin/ \
-  && ln -s /usr/bin/pip /home/jenkins/.local/bin/pip \
-  && chown -R jenkins:jenkins /home/jenkins/.local
-
-#====================================
 # NODE JS
-# See https://github.com/nodesource/distributions/blob/master/README.md
-# See https://nodejs.org/en/download/package-manager/#debian-and-ubuntu-based-linux-distributions
 #====================================
-RUN curl -sL https://deb.nodesource.com/setup_10.x | bash \
-    && apt-get install -y nodejs
+ENV NVM_DIR /usr/local/nvm
+ENV NODE_VERSION 10.16.3
 
-#====================================
-# AZURE CLI
-# https://docs.microsoft.com/en-us/cli/azure/install-azure-cli-apt?view=azure-cli-latest
-#====================================
+RUN mkdir -p $NVM_DIR \
+  && curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.2/install.sh | bash \
+  && . "$NVM_DIR/nvm.sh" && nvm install ${NODE_VERSION} \
+  && . "$NVM_DIR/nvm.sh" &&  nvm use v${NODE_VERSION} \
+  && . "$NVM_DIR/nvm.sh" && nvm alias default v${NODE_VERSION}
 
-RUN echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ xenial main" | tee /etc/apt/sources.list.d/azure-cli.list
-RUN curl -L https://packages.microsoft.com/keys/microsoft.asc | apt-key add -
-RUN apt-key adv --keyserver packages.microsoft.com --recv-keys 52E16F86FEE04B979B07E28DB02C46DF417A0893
-RUN apt-get -qqy --no-install-recommends install apt-transport-https \
-  && apt-get update -qqy \
-  && apt-get install -qqy --no-install-recommends azure-cli
-
-#====================================
-# BOWER, GRUNT, GULP
-#====================================
-
-RUN npm install --global grunt-cli@1.3.1 bower@1.8.4 gulp@4.0.0
-
-#====================================
-# Kubernetes CLI
-# See https://storage.googleapis.com/kubernetes-release/release/stable.txt
-#====================================
-RUN curl https://storage.googleapis.com/kubernetes-release/release/v1.16.1/bin/linux/amd64/kubectl -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl
-
-#====================================
-# OPENSHIFT V3 CLI
-# Only install "oc" executable, don't install "openshift", "oadmin"...
-# See https://github.com/openshift/origin/releases
-#====================================
-RUN mkdir /var/tmp/openshift \
-      && wget -O - "https://github.com/openshift/origin/releases/download/v3.11.0/openshift-origin-client-tools-v3.11.0-0cbc58b-linux-64bit.tar.gz" \
-      | tar -C /var/tmp/openshift --strip-components=1 -zxf - \
-      && mv /var/tmp/openshift/oc /usr/local/bin \
-      && rm -rf /var/tmp/openshift
+ENV NODE_PATH $NVM_DIR/v$NODE_VERSION/lib/node_modules
+ENV PATH $NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
 
 #====================================
 # JMETER
